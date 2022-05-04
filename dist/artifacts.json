@@ -1,0 +1,8 @@
+{
+  "builds": [
+    {
+      "imageName": "api",
+      "tag": "api:local"
+    }
+  ]
+}

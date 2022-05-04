@@ -1,0 +1,787 @@
+---
+# Source: sample-chart/charts/oauth2/charts/redis/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+automountServiceAccountToken: true
+metadata:
+  name: release-name-redis
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: redis
+    helm.sh/chart: redis-14.8.6
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/redis: runtime/default
+---
+# Source: sample-chart/charts/oauth2/templates/service-account.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: release-name-oauth2
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: oauth2
+    helm.sh/chart: oauth2-0.1.5
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: oauth2-proxy
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/oauth2-proxy: runtime/default
+---
+# Source: sample-chart/charts/oauth2/templates/secret-google.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: release-name-oauth2-google
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: oauth2
+    helm.sh/chart: oauth2-0.1.5
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: oauth2-proxy
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/oauth2-proxy: runtime/default
+type: Opaque
+data:
+  service-account.json: ""
+---
+# Source: sample-chart/charts/oauth2/charts/redis/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-name-redis-configuration
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: redis
+    helm.sh/chart: redis-14.8.6
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/redis: runtime/default
+data:
+  redis.conf: |-
+    # User-supplied common configuration:
+    # Enable AOF https://redis.io/topics/persistence#append-only-file
+    appendonly yes
+    # Disable RDB persistence, AOF persistence already enabled.
+    save ""
+    # End of common configuration
+  master.conf: |-
+    dir /data
+    # User-supplied master configuration:
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    # End of master configuration
+  replica.conf: |-
+    dir /data
+    slave-read-only yes
+    # User-supplied replica configuration:
+    rename-command FLUSHDB ""
+    rename-command FLUSHALL ""
+    # End of replica configuration
+---
+# Source: sample-chart/charts/oauth2/charts/redis/templates/health-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-name-redis-health
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: redis
+    helm.sh/chart: redis-14.8.6
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/redis: runtime/default
+data:
+  ping_readiness_local.sh: |-
+    #!/bin/bash
+
+    [[ -f $REDIS_PASSWORD_FILE ]] && export REDIS_PASSWORD="$(< "${REDIS_PASSWORD_FILE}")"
+    export REDISCLI_AUTH="$REDIS_PASSWORD"
+    response=$(
+      timeout -s 3 $1 \
+      redis-cli \
+        -h localhost \
+        -p $REDIS_PORT \
+        ping
+    )
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_liveness_local.sh: |-
+    #!/bin/bash
+
+    [[ -f $REDIS_PASSWORD_FILE ]] && export REDIS_PASSWORD="$(< "${REDIS_PASSWORD_FILE}")"
+    export REDISCLI_AUTH="$REDIS_PASSWORD"
+    response=$(
+      timeout -s 3 $1 \
+      redis-cli \
+        -h localhost \
+        -p $REDIS_PORT \
+        ping
+    )
+    if [ "$response" != "PONG" ] && [ "$response" != "LOADING Redis is loading the dataset in memory" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_master.sh: |-
+    #!/bin/bash
+
+    [[ -f $REDIS_MASTER_PASSWORD_FILE ]] && export REDIS_MASTER_PASSWORD="$(< "${REDIS_MASTER_PASSWORD_FILE}")"
+    export REDISCLI_AUTH="$REDIS_MASTER_PASSWORD"
+    response=$(
+      timeout -s 3 $1 \
+      redis-cli \
+        -h $REDIS_MASTER_HOST \
+        -p $REDIS_MASTER_PORT_NUMBER \
+        ping
+    )
+    if [ "$response" != "PONG" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_liveness_master.sh: |-
+    #!/bin/bash
+
+    [[ -f $REDIS_MASTER_PASSWORD_FILE ]] && export REDIS_MASTER_PASSWORD="$(< "${REDIS_MASTER_PASSWORD_FILE}")"
+    export REDISCLI_AUTH="$REDIS_MASTER_PASSWORD"
+    response=$(
+      timeout -s 3 $1 \
+      redis-cli \
+        -h $REDIS_MASTER_HOST \
+        -p $REDIS_MASTER_PORT_NUMBER \
+        ping
+    )
+    if [ "$response" != "PONG" ] && [ "$response" != "LOADING Redis is loading the dataset in memory" ]; then
+      echo "$response"
+      exit 1
+    fi
+  ping_readiness_local_and_master.sh: |-
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_readiness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_readiness_master.sh" $1 || exit_status=$?
+    exit $exit_status
+  ping_liveness_local_and_master.sh: |-
+    script_dir="$(dirname "$0")"
+    exit_status=0
+    "$script_dir/ping_liveness_local.sh" $1 || exit_status=$?
+    "$script_dir/ping_liveness_master.sh" $1 || exit_status=$?
+    exit $exit_status
+---
+# Source: sample-chart/charts/oauth2/charts/redis/templates/scripts-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-name-redis-scripts
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: redis
+    helm.sh/chart: redis-14.8.6
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/redis: runtime/default
+data:
+  start-master.sh: |
+    #!/bin/bash
+
+    [[ -f $REDIS_PASSWORD_FILE ]] && export REDIS_PASSWORD="$(< "${REDIS_PASSWORD_FILE}")"
+    if [[ ! -f /opt/bitnami/redis/etc/master.conf ]];then
+        cp /opt/bitnami/redis/mounted-etc/master.conf /opt/bitnami/redis/etc/master.conf
+    fi
+    if [[ ! -f /opt/bitnami/redis/etc/redis.conf ]];then
+        cp /opt/bitnami/redis/mounted-etc/redis.conf /opt/bitnami/redis/etc/redis.conf
+    fi
+    ARGS=("--port" "${REDIS_PORT}")
+    ARGS+=("--requirepass" "${REDIS_PASSWORD}")
+    ARGS+=("--masterauth" "${REDIS_PASSWORD}")
+    ARGS+=("--include" "/opt/bitnami/redis/etc/redis.conf")
+    ARGS+=("--include" "/opt/bitnami/redis/etc/master.conf")
+    exec redis-server "${ARGS[@]}"
+---
+# Source: sample-chart/charts/oauth2/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-name-oauth2
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: oauth2
+    helm.sh/chart: oauth2-0.1.5
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: oauth2-proxy
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/oauth2-proxy: runtime/default
+data:
+  oauth2_proxy.cfg: |
+    email_domains = [ "*" ]
+    upstreams = [ "file:///dev/null" ]
+---
+# Source: sample-chart/charts/oauth2/charts/redis/templates/headless-svc.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-name-redis-headless
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: redis
+    helm.sh/chart: redis-14.8.6
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/redis: runtime/default
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: tcp-redis
+      port: 6379
+      targetPort: redis
+  selector:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: release-name
+---
+# Source: sample-chart/charts/oauth2/charts/redis/templates/master/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-name-redis-master
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: redis
+    helm.sh/chart: redis-14.8.6
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: master
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/redis: runtime/default
+spec:
+  type: ClusterIP
+  
+  ports:
+    - name: tcp-redis
+      port: 6379
+      targetPort: redis
+      nodePort: null
+  selector:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/component: master
+---
+# Source: sample-chart/charts/oauth2/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-name-oauth2
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: oauth2
+    helm.sh/chart: oauth2-0.1.5
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: oauth2-proxy
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/oauth2-proxy: runtime/default
+spec:
+  type: ClusterIP
+  
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+      targetPort: http
+      nodePort: null
+  selector:
+    app.kubernetes.io/name: oauth2
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/component: oauth2-proxy
+---
+# Source: sample-chart/templates/api.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-name-sample-chart-api
+  labels:
+    helm.sh/chart: sample-chart-0.0.4
+    app.kubernetes.io/name: sample-chart
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm-api
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5000
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: sample-chart-api
+    app.kubernetes.io/instance: release-name
+---
+# Source: sample-chart/charts/oauth2/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-name-oauth2
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: oauth2
+    helm.sh/chart: oauth2-0.1.5
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: oauth2-proxy
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/oauth2-proxy: runtime/default
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oauth2
+      app.kubernetes.io/instance: release-name
+      app.kubernetes.io/component: oauth2-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oauth2
+        helm.sh/chart: oauth2-0.1.5
+        app.kubernetes.io/instance: release-name
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/component: oauth2-proxy
+    spec:
+      serviceAccountName: release-name-oauth2
+      
+      affinity:
+        podAffinity:
+          
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: oauth2
+                    app.kubernetes.io/instance: release-name
+                    app.kubernetes.io/component: oauth2-proxy
+                namespaces:
+                  - "poc"
+                topologyKey: kubernetes.io/hostname
+              weight: 1
+        nodeAffinity:
+          
+      securityContext:
+        fsGroup: 1001
+      containers:
+        - name: oauth2-proxy
+          image: docker.io/bitnami/oauth2-proxy:7.1.3-debian-10-r74
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add: []
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1001
+          args:
+            - --http-address=0.0.0.0:4180
+            - --config=/bitnami/oauth2-proxy/conf/oauth2_proxy.cfg
+            - --redirect-url=https://sample.127.0.0.1.nip.io/oauth2/callback
+            - --whitelist-domain=.127.0.0.1.nip.io,login.microsoftonline.com
+            - --cookie-domain=.127.0.0.1.nip.io
+            - --cookie-name=sample_oauth2
+            - --cookie-secure=true
+            - --email-domain="*"
+            - --scope=openid
+            - --provider=oidc
+            - --pass-access-token=true
+            - --set-xauthrequest=true
+            - --set-authorization-header=false
+            - --skip-jwt-bearer-tokens=true
+            - --skip-provider-button=true
+            - --silence-ping-logging=true
+            - --reverse-proxy=true
+          env:
+            - name: OAUTH2_PROXY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy
+                  key: client-id
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy
+                  key: client-secret
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy
+                  key: cookie-secret
+            - name: OAUTH2_PROXY_SESSION_STORE_TYPE
+              value: "redis"
+            - name: OAUTH2_PROXY_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy
+                  key: redis-password
+            - name: OAUTH2_PROXY_REDIS_CONNECTION_URL
+              value: redis://release-name-redis-master:6379
+          envFrom:
+          ports:
+            - containerPort: 4180
+              name: http
+              protocol: TCP
+          resources: 
+            limits:
+              cpu: 200m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 8Mi
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 5
+          volumeMounts:
+            - name: main-configuration
+              mountPath: /bitnami/oauth2-proxy/conf
+      volumes:
+        - name: main-configuration
+          configMap:
+            defaultMode: 420
+            name: release-name-oauth2
+---
+# Source: sample-chart/templates/api.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-name-sample-chart-api
+  annotations:    
+    # SNYK-CC-K8S-32: Containers should run with AppArmor profiles enabled for security reasons
+    container.apparmor.security.beta.kubernetes.io/release-name-sample-chart-api: runtime/default
+  labels:
+    helm.sh/chart: sample-chart-0.0.4
+    app.kubernetes.io/name: sample-chart
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sample-chart-api
+      app.kubernetes.io/instance: release-name
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sample-chart-api
+        app.kubernetes.io/instance: release-name
+    spec:
+      containers:
+        - name: sample-chart-api
+          image: "api:local"
+          imagePullPolicy: IfNotPresent
+          securityContext:                      # Apply security policies
+            runAsUser: 1000                     # <-- cat /etc/passwd | grep node
+            runAsNonRoot: true                  # <-- Disable root user
+            allowPrivilegeEscalation: false     # <-- Prevent sudo command
+            capabilities:                       # <-- Drop all kernal privileges except allowed
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true        # <-- Prevent changing of OS filesystem
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: VERSION
+              value: 0.0.4
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /api/healthcheck
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /api/healthcheck
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {}
+---
+# Source: sample-chart/charts/oauth2/charts/redis/templates/master/statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: release-name-redis-master
+  namespace: "poc"
+  labels:
+    app.kubernetes.io/name: redis
+    helm.sh/chart: redis-14.8.6
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: master
+  annotations:
+    container.apparmor.security.beta.kubernetes.io/redis: runtime/default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+      app.kubernetes.io/instance: release-name
+      app.kubernetes.io/component: master
+  serviceName: release-name-redis-headless
+  updateStrategy:
+    rollingUpdate: {}
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        helm.sh/chart: redis-14.8.6
+        app.kubernetes.io/instance: release-name
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/component: master
+      annotations:
+        checksum/configmap: c9756abb19d5e99e1f08854be7d479eeeaca2247b560487e8f5bd0ecdb647548
+        checksum/health: 755f7a960325b1c0ed6a385c904f48cee51b69d75f0b5a3bcc2dc4be3a6785fb
+        checksum/scripts: 4dd1e981bf4c035a22185ce460fdef5047b334aaadd4d567b6a74604d7a2c896
+        checksum/secret: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    spec:
+      
+      securityContext:
+        fsGroup: 1001
+      serviceAccountName: release-name-redis
+      affinity:
+        podAffinity:
+          
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: redis
+                    app.kubernetes.io/instance: release-name
+                    app.kubernetes.io/component: master
+                namespaces:
+                  - "poc"
+                topologyKey: kubernetes.io/hostname
+              weight: 1
+        nodeAffinity:
+          
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: redis
+          image: docker.io/bitnami/redis:6.2.5-debian-10-r0
+          imagePullPolicy: "IfNotPresent"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add: []
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsUser: 1001
+          command:
+            - /bin/bash
+          args:
+            - -c
+            - /opt/bitnami/scripts/start-scripts/start-master.sh
+          env:
+            - name: BITNAMI_DEBUG
+              value: "false"
+            - name: REDIS_REPLICATION_MODE
+              value: master
+            - name: ALLOW_EMPTY_PASSWORD
+              value: "no"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oauth2-proxy
+                  key: redis-password
+            - name: REDIS_TLS_ENABLED
+              value: "no"
+            - name: REDIS_PORT
+              value: "6379"
+          ports:
+            - name: redis
+              containerPort: 6379
+          livenessProbe:
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            # One second longer than command timeout should prevent generation of zombie processes.
+            timeoutSeconds: 6
+            successThreshold: 1
+            failureThreshold: 5
+            exec:
+              command:
+                - sh
+                - -c
+                - /health/ping_liveness_local.sh 5
+          readinessProbe:
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 5
+            exec:
+              command:
+                - sh
+                - -c
+                - /health/ping_readiness_local.sh 1
+          resources:
+            limits:
+              cpu: 200m
+              memory: 512Mi
+            requests:
+              cpu: 10m
+              memory: 16Mi
+          volumeMounts:
+            - name: start-scripts
+              mountPath: /opt/bitnami/scripts/start-scripts
+            - name: health
+              mountPath: /health
+            - name: redis-data
+              mountPath: /data
+              subPath: 
+            - name: config
+              mountPath: /opt/bitnami/redis/mounted-etc
+            - name: redis-tmp-conf
+              mountPath: /opt/bitnami/redis/etc/
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: start-scripts
+          configMap:
+            name: release-name-redis-scripts
+            defaultMode: 0755
+        - name: health
+          configMap:
+            name: release-name-redis-health
+            defaultMode: 0755
+        - name: config
+          configMap:
+            name: release-name-redis-configuration
+        - name: redis-tmp-conf
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+        labels:
+          app.kubernetes.io/name: redis
+          app.kubernetes.io/instance: release-name
+          app.kubernetes.io/component: master
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "8Gi"
+---
+# Source: sample-chart/templates/ingress.yaml
+# ----------------------------------------------------------
+# Expose all (protected) services through an ingress controller
+# ----------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: release-name-sample-chart
+  labels:
+    helm.sh/chart: sample-chart-0.0.4
+    app.kubernetes.io/name: sample-chart
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    
+    # Enable a application-specific auth proxy defined in the environment config...
+    nginx.ingress.kubernetes.io/auth-url: "https://$host/oauth2/auth"
+    nginx.ingress.kubernetes.io/auth-signin: "https://$host/oauth2/start?rd=$escaped_request_uri"
+    nginx.ingress.kubernetes.io/auth-response-headers: 'X-Auth-Request-User,X-Auth-Request-Email,X-Auth-Userid,X-Auth-Email,Authorization'
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      auth_request_set $token  $upstream_http_x_auth_request_access_token;
+      proxy_set_header X-Access-Token $token;
+    nginx.ingress.kubernetes.io/proxy-body-size: 50m
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+spec:
+
+# Bind to HTTPS port with the given certificates (if SSL enabled)
+  rules:
+  # Bind the routing rules to each host
+    - host: "sample.127.0.0.1.nip.io"
+      http:
+        paths:
+          -            # 
+            path: /api
+            pathType: Prefix
+            backend: # Ingress binding for v1.23.0
+              service:
+                name: release-name-sample-chart-api
+                port: 
+                  name: http
+---
+# Source: sample-chart/templates/ingress.yaml
+# ----------------------------------------------------------
+# For the localized oauth2 proxy, when enabled, we typically want to whitelist 
+# some files and paths, from the authentication. This class serves that purpouse.
+# ----------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: release-name-sample-chart-oauth
+  labels:
+    helm.sh/chart: sample-chart-0.0.4
+    app.kubernetes.io/name: sample-chart
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    nginx.ingress.kubernetes.io/enable-global-auth: "false"
+spec:
+# Bind to HTTPS port with the given certificates
+  rules:
+  # Bind the routing rules to each host
+    - host: "sample.127.0.0.1.nip.io"
+      http:
+        paths:          
+          # Whitelist the oauth routes
+          -            # 
+            path: /oauth2
+            pathType: Prefix
+            backend: # Ingress binding for v1.23.0
+              service:
+                name: release-name-oauth2
+                port: 
+                  name: http

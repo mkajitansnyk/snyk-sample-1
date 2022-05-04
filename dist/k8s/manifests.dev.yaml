@@ -1,0 +1,127 @@
+---
+# Source: sample-chart/templates/api.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: release-name-sample-chart-api
+  labels:
+    helm.sh/chart: sample-chart-0.0.4
+    app.kubernetes.io/name: sample-chart
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm-api
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5000
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: sample-chart-api
+    app.kubernetes.io/instance: release-name
+---
+# Source: sample-chart/templates/api.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: release-name-sample-chart-api
+  annotations:    
+    # SNYK-CC-K8S-32: Containers should run with AppArmor profiles enabled for security reasons
+    container.apparmor.security.beta.kubernetes.io/release-name-sample-chart-api: runtime/default
+  labels:
+    helm.sh/chart: sample-chart-0.0.4
+    app.kubernetes.io/name: sample-chart
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sample-chart-api
+      app.kubernetes.io/instance: release-name
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sample-chart-api
+        app.kubernetes.io/instance: release-name
+    spec:
+      containers:
+        - name: sample-chart-api
+          image: "api:local"
+          imagePullPolicy: IfNotPresent
+          securityContext:                      # Apply security policies
+            runAsUser: 1000                     # <-- cat /etc/passwd | grep node
+            runAsNonRoot: true                  # <-- Disable root user
+            allowPrivilegeEscalation: false     # <-- Prevent sudo command
+            capabilities:                       # <-- Drop all kernal privileges except allowed
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true        # <-- Prevent changing of OS filesystem
+          env:
+            - name: NODE_ENV
+              value: dev
+            - name: VERSION
+              value: 0.0.4
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /api/healthcheck
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /api/healthcheck
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {}
+---
+# Source: sample-chart/templates/ingress.yaml
+# ----------------------------------------------------------
+# Expose all (protected) services through an ingress controller
+# ----------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: release-name-sample-chart
+  labels:
+    helm.sh/chart: sample-chart-0.0.4
+    app.kubernetes.io/name: sample-chart
+    app.kubernetes.io/instance: release-name
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    
+    # No application-specific authentication was found
+    nginx.ingress.kubernetes.io/enable-global-auth: 'true'
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      auth_request_set $token  $upstream_http_x_auth_request_access_token;
+      proxy_set_header X-Access-Token $token;
+    nginx.ingress.kubernetes.io/proxy-body-size: 50m
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+spec:
+
+# Bind to HTTPS port with the given certificates (if SSL enabled)
+  rules:
+  # Bind the routing rules to each host
+    - host: "sample.127.0.0.1.nip.io"
+      http:
+        paths:
+          -            # 
+            path: /api
+            pathType: Prefix
+            backend: # Ingress binding for v1.23.0
+              service:
+                name: release-name-sample-chart-api
+                port: 
+                  name: http
